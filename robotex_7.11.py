@@ -1,3 +1,7 @@
+# CHECK TRESHHOLD
+# ASK ABOUT THE GOAL
+# ASK ABOUT THE REFEREE COMMAND
+
 # import the necessary packages
 from collections import deque
 from numpy import interp
@@ -19,21 +23,29 @@ ball_y = 300
 length_x = 600
 length_y = 300
 
-# List for blue goal centerpoints, so that we know which way to turn
-blue_goal_centre = []
+# Sensor Value
+ball_sensor = 0
+
+# When it's stuck between two
+ball_counter_two = 0
+ball_radius_two = 0
+
+# List for opponent goal centerpoints, so that we know which way to turn
+opponent_goal_centre = []
+
 
 # Serial communication
-port = "COM8"
+port = "COM4"
 baud = 9600
-ser = serial.Serial(port, baud, serial.EIGHTBITS)
+ser = serial.Serial(port, baud, serial.EIGHTBITS, timeout=0)
 def sc(command):
     if ser.isOpen:
         ser.write(command + '\r\n')
 
-'''# RF Serial
-port = "COM5"
+# RF Serial
+port = "COM6"
 baud = 9600
-rf = serial.Serial(port, baud, serial.EIGHTBITS)'''
+rf = serial.Serial(port, baud, serial.EIGHTBITS, timeout=0)
 '''def srf():
     global rf_input, start, stop
     if rf.isOpen:
@@ -43,13 +55,51 @@ rf = serial.Serial(port, baud, serial.EIGHTBITS)'''
         rf.write(rf_input) # + '\r\n')
         print rf_input'''
 
+
 #start = time.time()
+
+def kick():
+    return sc('k1')
+
+def ball_value():
+    return ser.read(1)
+    
         
 def sd_all(a,b,c,d):
     return sc('a'+str(a)+'b'+str(b)+'c'+str(c)+'d'+str(d))
 
 def sd(a,b,c):
     return sc('a'+str(a)+'b'+str(b)+'c'+str(c))
+
+def cnts_width(cnt):
+    leftmost = int((cnt[cnt[:,:,0].argmin()][0])[0])
+    rightmost = int((cnt[cnt[:,:,0].argmax()][0])[0])
+    return abs(rightmost - leftmost)
+
+def cnts_height(cnt):
+    topmost = int((cnt[cnt[:,:,1].argmin()][0])[1])
+    bottommost = int((cnt[cnt[:,:,1].argmax()][0])[1])
+    return abs(topmost - bottommost)
+
+def goal_position(cnt):
+    if cnts_width(cnt) > (cnts_height(cnt)*2):
+        return True
+    else:
+        return False
+
+def biggest_contour(cnts):
+    for i, c in enumerate(cnts):
+        area = cv2.contourArea(c)
+        areaArray.append(area)
+    bc = (sorted(zip(areaArray, cnts), key=lambda x: x[0], reverse=True))[0][1]
+    return bc
+
+def contour_centre(cnts):
+    centre = []
+    moments_b = cv2.moments(biggest_contour(cnts))
+    centre.append(int(moments_b['m10'] / moments_b['m00']))
+    centre.append(int(moments_b['m01'] / moments_b['m00']))
+    return centre
 
 
 #rf('AX')
@@ -62,16 +112,18 @@ ap.add_argument("-b", "--buffer", type=int, default=64,
 args = vars(ap.parse_args())
 
 # upper and lower boundaries for orange (ball) and blue (one of the goals)
-orangeLower = (3, 40, 42)
-orangeUpper = (15, 235, 255)
-blueLower = (106,32,51)
-blueUpper = (122,255,151)
-yellowLower = (2,54,168)
-yellowUpper = (44,209,247)
-whiteLower = (0,4,40)
-whiteUpper = (45,206,220)
+orangeLower = (0, 114, 139)
+orangeUpper = (8, 255, 255)
+blueLower = (105,52,29)
+blueUpper = (145,149,152)
+yellowLower = (0,39,172)
+yellowUpper = (26,142,253)
+whiteLower = (0,15,132)
+whiteUpper = (181,67,255)
 greenLower = (43,46,32)
 greenUpper = (111,177,84)
+blackLower = (0,7,44)
+blackUpper = (181,137,101)
 
 pts = deque(maxlen=args["buffer"])
 
@@ -81,41 +133,110 @@ if not args.get("video", False):
     camera = cv2.VideoCapture(0)
 
 seq = ''
-toggle = 1
+balli = ''
+toggle = 0
+once = 1
+sen_counter = 0
+green_signal = 0
+
+f_r = 'BB'
+start_var = 'a' + f_r + 'START'
+stop_var = 'a' + f_r + 'STOP'
+ready = 'a' + f_r + 'PING'
+acknowledge = 'a' + f_r + 'ACK------'
+
 
 # keep looping
 while True:
-    '''for c in rf.read():
+
+    
+    for c in rf.read():
         seq = seq+c
         #print seq
-        if 'aAXSTART' in seq:
+        if 'aBXSTART' in seq :
             seq = ''
+            #print 'SUCCESS'
             toggle = 1
+            time.sleep(0.1)
+            #sd_all(0,0,0,1)
+            #rf.write(acknowledge)
             print 'SUCCESS'
-            sd('d1')
-            break'''
+            #time.sleep(1.0)
+            
+            #sd('d1')
+            break
 
+        elif start_var in seq :
+            seq = ''
+            #print 'SUCCESS'
+            toggle = 1
+            #sd_all(0,0,0,1)
+            rf.write(acknowledge)
+            print 'SUCCESS'
+            #time.sleep(1.0)
+            
+            #sd('d1')
+            break
+
+        elif ready in seq:
+            seq = ''
+            rf.write(acknowledge)
+            break
+    
+    #print 'out of loop'
     while toggle == 1:
 
-        '''for c in rf.read():
-            seq = seq+c
-            #print seq
-            if 'aAXSTOP' in seq:
-                seq = ''
-                toggle = 0
-                print 'STOP!!'
-                time.sleep(0.5)
-                sd_all(0,0,0,0)
-                break'''
-    
         # grab the current frame
         (grabbed, frame) = camera.read()
-        stop = 0
 
         # if we are viewing a video and we did not grab a frame,
         # then we have reached the end of the video
         if args.get("video") and not grabbed:
             break
+
+
+        for c in rf.read():
+            seq = seq+c
+            #print seq
+            if 'aBXSTOP' in seq:
+                seq = ''
+                toggle = 0
+                #rf.write('aABPING')
+                print 'STOP!!'
+                time.sleep(0.1)
+                sd_all(0,0,0,0)
+                break
+
+            elif stop_var in seq:
+                seq = ''
+                toggle = 0
+                rf.write(acknowledge)
+                print 'STOP!!'
+                time.sleep(0.1)
+                sd_all(0,0,0,0)
+                break
+
+            elif ready in seq:
+                seq = ''
+                rf.write(acknowledge)
+                break
+            
+        #print 'SUCCESS'
+        
+        #ball_sensor = 0
+        if '1' in ser.read():
+            sen_counter = sen_counter + 1
+            if sen_counter > 8:
+                ball_sensor = 1
+                sen_counter = 0
+        
+        #else:
+            #ball_sensor = 0
+
+        #if ball_sensor == 1:
+            #kick()
+            
+        #print 'boo'
 
         # resize the frame, blur it, and convert it to the HSV
         # color space
@@ -146,40 +267,34 @@ while True:
         mask5 = cv2.erode(mask5, None, iterations=2)
         mask5 = cv2.dilate(mask5, None, iterations=2)
 
+        mask6 = cv2.inRange(hsv, blackLower, blackUpper)
+        mask6 = cv2.erode(mask6, None, iterations=2)
+        mask6 = cv2.dilate(mask6, None, iterations=2)
+
         # find contours in the mask and initialize the current
         cnts, hierarchy = cv2.findContours(mask.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)[-2:]
         cnts2 = cv2.findContours(mask2.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2]
         cnts3 = cv2.findContours(mask3.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2]
         cnts4 = cv2.findContours(mask4.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2]
         cnts5 = cv2.findContours(mask5.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2]
+        cnts6 = cv2.findContours(mask6.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2]
+
+
+        # cnts2 for blue --- cnts3 for yellow
+        cntsg = cnts2
+        # our goal
+        cntso = cnts3
 
         areaArray = []
 
-        # for finding the blue goal
-        '''if len(cnts2) == 0:
-            bigger = 0
-            smaller = 0
-            if blue_goal_centre > 4:
-                for i in range(len(blue_goal_centre)-1):
-                    if blue_goal_centre[i][0] < blue_goal_centre[i+1][0]:
-                        bigger += 1
-                    else:
-                        smaller += 1
-                if smaller == 0:
-                    sd(-25,-25,-25)
-                elif bigger == 0:
-                    sd(25,25,25)
-            else:
-                sd(-25,-50,25)
-
         # for finding the ball 
-        if len(cnts) == 0:
-            sd(-25,-50,25)'''
-                    
-    
-        # only proceed if at least one contour was found
-        if len(cnts) > 0:
+        if len(cnts) == 0 and ball_sensor == 0 and cntsg == 0 and ctso > 0:
+            sd_all(-75,0,75,1)
+        elif len(cnts) == 0 and ball_sensor == 0:
+            sd_all(50,50,50,1)
 
+        # only proceed if at least one contour was found
+        if len(cnts) > 0 and ball_sensor == 0:
             for i, c in enumerate(cnts):
                 area = cv2.contourArea(c)
                 areaArray.append(area)
@@ -208,76 +323,153 @@ while True:
 
             ball_radius = ball_radius_calculated
             #print(ball_radius)
-        
+
+            if ball_radius_two == 0:
+                ball_radius_two = ball_radius
+            if (ball_radius_two < (ball_radius+7)) and (ball_radius_two > (ball_radius-7)):
+                ball_counter_two += 1
+            if (ball_counter_two > 50):
+                sd_all(-100,100,100,1)
 
             # Moving the motors
             #turn right
-            if (centre_ball[0] > 350):
-                #print("right")
-                value_right = int(interp(centre_ball[0],[350,600],[0,250]))
-                sd(-50,value_right,50)
+            if (centre_ball[0] > 330) and (ball_radius < 18):
+                sd_all(75,75,75,1)
+                #if (ball_sensor ==1):
+                    #sd_all(0,0,0,0)
+                if toggle == 0:
+                    sd_all(0,0,0,0)
+                    break
+                
+            if (centre_ball[0] > 330) and (ball_radius >= 18):
+                sd_all(75,75,75,1);
                 if toggle == 0:
                     sd_all(0,0,0,0)
                     break
                 
 
             #turn left
-            if (centre_ball[0] < 250):
-                value_left = int(interp(centre_ball[0],[250,0],[0,250]))
-                sd(-50,-value_left,50)
+            if (centre_ball[0] < 230) and (ball_radius < 18):
+                sd_all(-75,-75,-75,1)
+                #if (ball_sensor ==1):
+                    #sd_all(0,0,0,0)
                 if toggle == 0:
                     sd_all(0,0,0,0)
                     break
-            
-
-            #go forward
-            if (centre_ball[0] > 250 and centre_ball[0] < 350): # and ball_radius < length_x/8):
-                sd(-75,0,75)
+                
+            if (centre_ball[0] < 230) and (ball_radius >= 18):
+                sd_all(-75,-75,-75,1)
                 if toggle == 0:
                     sd_all(0,0,0,0)
-                    break    
+                    break
+
+            
+            #go forward
+            if (centre_ball[0] > 230) and (centre_ball[0] < 330) and ball_radius < 18:
+                sd_all(-350,0,350,1)
+                #if (ball_sensor ==1):
+                    #sd_all(0,0,0,0)
+                if toggle == 0:
+                    sd_all(0,0,0,0)
+                    break
+
+            if (centre_ball[0] > 230) and (centre_ball[0] < 330) and ball_radius > 18:
+                sd_all(-250,0,250,1)
+                #if (ball_sensor ==1):
+                    #sd_all(0,0,0,0)
+                if toggle == 0:
+                    sd_all(0,0,0,0)
+                    break
 
 
 
-        if len(cnts2) > 0:
+        # for finding the opponent's goal
+        '''if len(cntsg) == 0 and ball_sensor == 1:
+            bigger = 0
+            smaller = 0
+            if opponent_goal_centre > 4:
+                for i in range(len(opponent_goal_centre)-1):
+                    if opponent_goal_centre[i][0] < opponent_goal_centre[i+1][0]:
+                        bigger += 1
+                    else:
+                        smaller += 1
+                if smaller == 0:
+                    # print('smaller')
+                    sd_all(-80,-80,-80,1)
+                elif bigger == 0:
+                    # print('bigger')
+                    sd_all(80,80,80,1)
+            else:
+                sd_all(-80,-80,-80,1)'''
+        
+
+        if ball_sensor == 1 and len(cntsg) == 0:
+            sd_all(150,150,150,1)
+            
+        if len(cntsg) > 0 and ball_sensor == 1:
+            ball_counter_two = 0
+            ball_radius_two = 0
+            
             # goal area
-            for i, c in enumerate(cnts2):
+            for i, c in enumerate(cntsg):
                 area = cv2.contourArea(c)
                 areaArray.append(area)
 
             # first sort the array by area
             # bc_g = goal contour
-            bc_g = (sorted(zip(areaArray, cnts2), key=lambda x: x[0], reverse=True))[0][1]
+            bc_g = (sorted(zip(areaArray, cntsg), key=lambda x: x[0], reverse=True))[0][1]
             centre_goal = []
             moments_g = cv2.moments(bc_g)
             centre_goal.append(int(moments_g['m10'] / moments_g['m00']))
             centre_goal.append(int(moments_g['m01'] / moments_g['m00']))
             cv2.circle(frame, (centre_goal[0], centre_goal[1]), 3, (0, 0, 0), -1)
 
-            if len(blue_goal_centre) < 11:
-                blue_goal_centre.append(centre_goal)
+            if len(opponent_goal_centre) < 11:
+                opponent_goal_centre.append(centre_goal)
             else:
-                blue_goal_centre = []
+                opponent_goal_centre = []
 
-            #print (centre_goal)
-
+        
+            
             # draw it
             x, y, w, h = cv2.boundingRect(bc_g)
-            cv2.drawContours(frame, bc_g, -1, (255, 0, 0), 2)
+            #cv2.drawContours(frame, bc_g, -1, (255, 0, 0), 2)
 
+            #if cnts
+
+            #turn right
+            if (centre_goal[0] > 330):
+                value_right = int(interp(centre_goal[0],[380,600],[0,100]))
+                sd_all(30,30,30,1)
+                if toggle == 0:
+                    sd_all(0,0,0,0)
+            
+            #turn left
+            if (centre_goal[0] < 300):
+                value_left = int(interp(centre_goal[0],[280,0],[0,100]))
+                sd_all(-30,-30,-30,1)
+                if toggle == 0:
+                    sd_all(0,0,0,0)
+
+            if (centre_goal[0] > 300 and centre_goal[0] < 330): # and goal_position(bc_g):
+                sd_all(0,0,0,1)
+                #time.sleep(2)
+                kick()
+                ball_sensor=0
+
+            #goal_position(bc_g)'''
 
 
         
-        
-        cv2.drawContours(frame, cnts3, -1, (52, 180, 205), 2)
-        cv2.drawContours(frame, cnts4, -1, (255, 255, 255), 2)
-        cv2.drawContours(frame, cnts5, -1, (0, 255, 0), 2) 
+        cv2.drawContours(frame, cnts2, -1, (52, 180, 205), 2)
+        #cv2.drawContours(frame, cnts4, -1, (255, 255, 255), 2)
+        #cv2.drawContours(frame, cnts, -1, (0, 255, 0), 2)
             
 
 
-    # show the frame to our screen
-        #cv2.imshow("Frame", frame)
-        #key = cv2.waitKey(1) & 0xFF
+        # show the frame to our screen
+        cv2.imshow("Frame", frame)
+        key = cv2.waitKey(1) & 0xFF
 
     # if the 'esc' key is pressed, stop the loop
         if cv2.waitKey(1) & 0xFF == 27:
